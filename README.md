@@ -60,9 +60,17 @@ WoL funciona mesmo sem eles terem aparecido numa varredura.
 
 ## Docker
 
+O `docker-compose.yml` usa a imagem já publicada no Docker Hub
+(`pajeritmia/wol-auto`, gerada automaticamente pelo GitHub Actions a cada
+push — veja a seção de CI/CD abaixo), então não builda nada localmente:
+
 ```bash
-docker compose up --build
+docker compose pull
+docker compose up -d
 ```
+
+Isso também é o que você cola direto no editor do Portainer (Stacks → Web
+editor) para subir o stack sem precisar do Dockerfile/código-fonte no host.
 
 App fica disponível em `http://localhost:8099` (ou `http://<ip-da-maquina>:8099`,
 já que o compose usa `network_mode: host` para o ping sweep, ARP e o
@@ -70,8 +78,27 @@ broadcast do magic packet alcançarem a LAN de verdade — em modo bridge
 padrão do Docker isso normalmente não funciona). Detalhes e alternativas
 estão comentados em [docker-compose.yml](docker-compose.yml).
 
+Para buildar a imagem localmente a partir do código-fonte (ex: para testar
+uma mudança antes de fazer push), use o `Dockerfile` diretamente:
+
+```bash
+docker build -t wol-auto:local .
+docker run --rm -it --network host -e PORT=8099 wol-auto:local
+```
+
 Os dispositivos cadastrados persistem no volume nomeado `wol-data`
 (`/app/data/devices.json` dentro do container).
+
+### Interface de rede errada dentro do Docker
+
+Com `network_mode: host` o container enxerga **todas** as interfaces do
+host, inclusive as virtuais que o próprio Docker cria (`docker0`, `br-*`,
+`veth*`, etc.) — elas são filtradas automaticamente e não entram na
+varredura. Se ainda assim a interface detectada não for a da sua LAN
+física, force manualmente pelo nome exato da interface via variável de
+ambiente `NETWORK_IFACE` (ex: `eth0`, `ens160`) — veja o exemplo comentado
+em [docker-compose.yml](docker-compose.yml). O nome correto aparece em
+`ip addr` (Linux) rodado no host.
 
 ## CI/CD — publicação automática no Docker Hub
 

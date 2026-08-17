@@ -1,11 +1,17 @@
 services:
   wol-auto:
-    build: .
+    image: pajeritmia/wol-auto:latest
     container_name: wol-auto
     restart: unless-stopped
     environment:
       - PORT=8099
       - DATA_DIR=/app/data
+      # Com network_mode: host o app enxerga TODAS as interfaces do host,
+      # inclusive as virtuais que o proprio Docker cria (docker0, br-*,
+      # veth*) — elas ja sao ignoradas automaticamente. Se ainda assim ele
+      # detectar a interface errada no seu host, descomente a linha abaixo e
+      # informe o nome exato da interface da sua LAN (ex: eth0, ens160):
+      # - NETWORK_IFACE=eth0
     volumes:
       - wol-data:/app/data
 
