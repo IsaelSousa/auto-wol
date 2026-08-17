@@ -57,3 +57,36 @@ WoL funciona mesmo sem eles terem aparecido numa varredura.
 - Para acordar um PC pela internet (fora da LAN), seria necessário port
   forwarding do UDP/9 no roteador para o broadcast da rede — fora do escopo
   deste projeto, que foi pensado para uso na rede local.
+
+## Docker
+
+```bash
+docker compose up --build
+```
+
+App fica disponível em `http://localhost:8099` (ou `http://<ip-da-maquina>:8099`,
+já que o compose usa `network_mode: host` para o ping sweep, ARP e o
+broadcast do magic packet alcançarem a LAN de verdade — em modo bridge
+padrão do Docker isso normalmente não funciona). Detalhes e alternativas
+estão comentados em [docker-compose.yml](docker-compose.yml).
+
+Os dispositivos cadastrados persistem no volume nomeado `wol-data`
+(`/app/data/devices.json` dentro do container).
+
+## CI/CD — publicação automática no Docker Hub
+
+O workflow [.github/workflows/docker-publish.yml](.github/workflows/docker-publish.yml)
+builda a imagem (multi-arch `linux/amd64` + `linux/arm64`) e publica no
+Docker Hub como `<seu-usuario>/wol-auto` a cada push na branch `main` ou tag
+`vX.Y.Z`. Em pull requests ele só builda (sem publicar), como validação.
+
+Para funcionar, cadastre dois **secrets** no repositório do GitHub
+(*Settings → Secrets and variables → Actions → New repository secret*):
+
+| Secret | Valor |
+|---|---|
+| `DOCKERHUB_USERNAME` | seu usuário do Docker Hub |
+| `DOCKERHUB_TOKEN` | um *Access Token* do Docker Hub (não a senha da conta) — gere em Docker Hub → Account Settings → Security → New Access Token |
+
+Tags geradas automaticamente: `latest` (branch `main`), `sha-<commit>`, e
+`X.Y.Z` / `X.Y` quando você criar uma tag git `vX.Y.Z`.
