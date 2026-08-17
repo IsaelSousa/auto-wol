@@ -1,0 +1,34 @@
+services:
+  wol-auto:
+    build: .
+    container_name: wol-auto
+    restart: unless-stopped
+    environment:
+      - PORT=8099
+      - DATA_DIR=/app/data
+    volumes:
+      - wol-data:/app/data
+
+    # IMPORTANTE: o ping sweep, a leitura da tabela ARP e o broadcast UDP do
+    # magic packet precisam enxergar a rede fisica (LAN) de verdade. Em modo
+    # bridge (padrao do Docker) o container fica isolado numa sub-rede
+    # virtual e a descoberta/broadcast normalmente NAO alcanca os outros
+    # dispositivos da sua LAN. Por isso usamos network_mode: host.
+    #
+    # - Funciona nativamente em Docker no Linux (inclusive um host Linux
+    #   dedicado, tipo Raspberry Pi/servidor sempre ligado).
+    # - No Docker Desktop (Windows/Mac) o "host networking" e
+    #   limitado/experimental e pode nao dar acesso real a LAN. Nesses casos,
+    #   rode o app direto com `npm start` (fora do Docker) ou em uma VM/host
+    #   Linux na mesma rede.
+    network_mode: host
+
+    # Com network_mode: host o container usa a porta 8099 diretamente do
+    # host (nao ha mapeamento "ports:"). Se preferir isolar em rede bridge
+    # (perdendo a descoberta automatica de dispositivos na LAN), comente a
+    # linha "network_mode: host" acima e descomente as linhas abaixo:
+    # ports:
+    #   - "8099:8099"
+
+volumes:
+  wol-data:

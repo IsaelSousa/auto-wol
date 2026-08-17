@@ -1,6 +1,6 @@
 {
   "name": "wol-auto",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "SPA local para Wake on LAN com descoberta automatica de dispositivos na rede",
   "type": "module",
   "main": "server.js",
