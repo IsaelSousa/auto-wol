@@ -3,7 +3,35 @@ const state = {
   subnets: [],
   scanning: false,
   waking: new Set(),
+  recentIds: new Set(),
+  showDiscovered: false,
 };
+
+// quantos dispositivos aparecem na barra de "mais usados"
+const RECENT_LIMIT = 4;
+
+/**
+ * Um dispositivo entra na SUA lista quando voce realmente o usa: adicionado
+ * manualmente, fixado (pinned), ja acordado ao menos uma vez, ou e a propria
+ * maquina. Todo o resto que a varredura acha fica na secao "Descobertos".
+ */
+function isTracked(d) {
+  return Boolean(d.manual || d.self || d.pinned || (d.wakeCount || 0) > 0);
+}
+
+/**
+ * Ordena os dispositivos pelo quanto sao usados (numero de vezes que foram
+ * acordados, desempatando pelo uso mais recente) e devolve os primeiros.
+ * E isso que alimenta a secao "Mais usados" automaticamente.
+ */
+function mostUsed(devices) {
+  return devices
+    .filter((d) => (d.wakeCount || 0) > 0)
+    .sort((a, b) =>
+      (b.wakeCount || 0) - (a.wakeCount || 0) ||
+      new Date(b.lastWokenAt || 0) - new Date(a.lastWokenAt || 0))
+    .slice(0, RECENT_LIMIT);
+}
 
 const app = document.getElementById('app');
 
@@ -45,7 +73,12 @@ async function scanNetwork() {
     const data = await api('/api/scan', { method: 'POST' });
     state.devices = data.devices;
     state.subnets = data.subnets;
-    toast(`Varredura concluida: ${data.found} dispositivo(s) responderam na rede.`, 'success');
+    const discovered = state.devices.filter((d) => !isTracked(d)).length;
+    toast(
+      `Varredura concluida: ${data.found} responderam.` +
+      (discovered ? ` ${discovered} em "Descobertos na rede".` : ''),
+      'success',
+    );
   } catch (err) {
     toast(err.message, 'error');
   } finally {
@@ -58,7 +91,8 @@ async function wakeDevice(device) {
   state.waking.add(device.id);
   render();
   try {
-    await api(`/api/wake/${device.id}`, { method: 'POST' });
+    const res = await api(`/api/wake/${device.id}`, { method: 'POST' });
+    if (res?.device) Object.assign(device, res.device);
     toast(`Magic packet enviado para ${device.name} (${device.mac}).`, 'success');
   } catch (err) {
     toast(err.message, 'error');
@@ -100,6 +134,32 @@ async function addManualDevice({ name, mac, ip }) {
   });
   state.devices.push(device);
   render();
+}
+
+async function setPinned(device, pinned) {
+  try {
+    const updated = await api(`/api/devices/${device.id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ pinned }),
+    });
+    Object.assign(device, updated);
+    if (pinned) toast(`"${device.name}" salvo nos seus dispositivos.`, 'success');
+    render();
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
+
+async function pruneDiscovered() {
+  if (!confirm('Remover da lista todos os dispositivos descobertos que voce nunca usou?\n\nOs que voce adicionou, fixou ou ja acordou permanecem.')) return;
+  try {
+    const data = await api('/api/devices/prune', { method: 'POST' });
+    state.devices = data.devices;
+    toast(`${data.removed} dispositivo(s) descoberto(s) removido(s).`, 'success');
+    render();
+  } catch (err) {
+    toast(err.message, 'error');
+  }
 }
 
 // ---------------- UI helpers ----------------
@@ -145,21 +205,113 @@ function el(tag, attrs = {}, children = []) {
 
 // ---------------- render ----------------
 
+function sortDevices(a, b) {
+  return (
+    Number(state.recentIds.has(b.id)) - Number(state.recentIds.has(a.id)) ||
+    Number(b.online) - Number(a.online) ||
+    a.name.localeCompare(b.name)
+  );
+}
+
 function render() {
   app.innerHTML = '';
   app.append(renderHeader(), renderInfoBanner(), renderToolbar());
 
+  const tracked = state.devices.filter(isTracked);
+  const discovered = state.devices.filter((d) => !isTracked(d));
+
+  const recent = mostUsed(tracked);
+  state.recentIds = new Set(recent.map((d) => d.id));
+
   if (state.devices.length === 0) {
     app.append(renderEmpty());
   } else {
-    const grid = el('div', { class: 'grid' }, state.devices
-      .slice()
-      .sort((a, b) => Number(b.online) - Number(a.online) || a.name.localeCompare(b.name))
-      .map(renderCard));
-    app.append(grid);
+    // barra de atalho so aparece quando a lista e grande o suficiente pra valer
+    if (tracked.length > RECENT_LIMIT && recent.length > 0) app.append(renderRecent(recent));
+
+    if (tracked.length > 0) {
+      app.append(el('div', { class: 'grid' }, tracked.slice().sort(sortDevices).map(renderCard)));
+    } else {
+      app.append(el('div', { class: 'empty' }, [
+        el('div', {}, 'Sua lista esta vazia.'),
+        el('div', { class: 'subtitle' }, 'Escaneie a rede e clique em "＋ Salvar" nos dispositivos que quiser manter, ou adicione um manualmente.'),
+      ]));
+    }
+
+    if (discovered.length > 0) app.append(renderDiscovered(discovered));
   }
 
   app.append(renderFooter());
+}
+
+function renderDiscovered(devices) {
+  const open = state.showDiscovered;
+  const children = [
+    el('button', {
+      class: 'disc-toggle',
+      onclick: () => { state.showDiscovered = !open; render(); },
+    }, [
+      el('span', { class: 'disc-caret' }, open ? '▾' : '▸'),
+      el('strong', {}, `Descobertos na rede (${devices.length})`),
+      el('span', { class: 'hint' }, 'vistos na varredura, ainda nao salvos'),
+    ]),
+  ];
+
+  if (open) {
+    children.push(el('div', { class: 'disc-actions' }, [
+      el('button', { class: 'btn ghost small', onclick: pruneDiscovered }, ['🧹 Limpar todos']),
+    ]));
+    children.push(el('div', { class: 'disc-list' }, devices
+      .slice()
+      .sort((a, b) => Number(b.online) - Number(a.online) || (a.ip || '').localeCompare(b.ip || ''))
+      .map(renderDiscoveredRow)));
+  }
+
+  return el('div', { class: 'discovered' }, children);
+}
+
+function renderDiscoveredRow(device) {
+  const isWaking = state.waking.has(device.id);
+  return el('div', { class: 'disc-row' }, [
+    el('span', { class: `status-dot ${device.online ? 'online' : ''}`, title: device.online ? 'Online' : 'Offline' }),
+    el('div', { class: 'disc-id' }, [
+      el('span', { class: 'disc-name' }, device.name),
+      el('code', {}, `${device.mac}${device.ip ? ` · ${device.ip}` : ''}`),
+    ]),
+    el('div', { class: 'disc-row-actions' }, [
+      el('button', {
+        class: 'btn small',
+        disabled: isWaking ? 'true' : null,
+        onclick: () => wakeDevice(device),
+      }, [isWaking ? el('span', { class: 'spinner' }) : '⚡', 'Acordar']),
+      el('button', { class: 'btn small primary', onclick: () => setPinned(device, true) }, '＋ Salvar'),
+      el('button', { class: 'btn small danger', onclick: () => deleteDevice(device) }, '🗑'),
+    ]),
+  ]);
+}
+
+function renderRecent(devices) {
+  return el('div', { class: 'recent' }, [
+    el('div', { class: 'section-title' }, [
+      '⭐ Mais usados',
+      el('span', { class: 'hint' }, 'atualizado automaticamente conforme voce acorda os dispositivos'),
+    ]),
+    el('div', { class: 'recent-row' }, devices.map((device) => {
+      const isWaking = state.waking.has(device.id);
+      return el('button', {
+        class: 'chip',
+        disabled: (isWaking || device.self) ? 'true' : null,
+        title: device.self
+          ? 'Este e o dispositivo onde o app esta rodando'
+          : `Acordar ${device.name} — usado ${device.wakeCount}x`,
+        onclick: () => wakeDevice(device),
+      }, [
+        isWaking ? el('span', { class: 'spinner' }) : '⚡',
+        el('span', { class: 'chip-name' }, device.name),
+        el('span', { class: 'chip-count' }, `${device.wakeCount}x`),
+      ]);
+    })),
+  ]);
 }
 
 function renderHeader() {
@@ -230,12 +382,16 @@ function renderCard(device) {
       el('span', { class: `badge ${device.online ? 'online' : ''}` }, device.online ? 'Online' : 'Offline'),
       device.manual ? el('span', { class: 'badge manual' }, 'Manual') : null,
       device.self ? el('span', { class: 'badge self' }, '💻 Este dispositivo') : null,
+      state.recentIds.has(device.id) ? el('span', { class: 'badge recent' }, '⭐ Mais usado') : null,
     ]),
     el('div', { class: 'meta' }, [
       el('div', {}, ['MAC: ', el('code', {}, device.mac)]),
       el('div', {}, ['IP: ', el('code', {}, device.ip || '—')]),
       device.hostname ? el('div', {}, ['Hostname: ', el('code', {}, device.hostname)]) : null,
       el('div', {}, `Visto por ultimo: ${timeAgo(device.lastSeen)}`),
+      device.wakeCount
+        ? el('div', {}, `Acordado ${device.wakeCount}x · ultima vez ${timeAgo(device.lastWokenAt)}`)
+        : null,
     ]),
     el('div', { class: 'card-actions' }, [
       el('button', {
@@ -255,11 +411,13 @@ function renderCard(device) {
 }
 
 function renderFooter() {
-  const total = state.devices.length;
-  const online = state.devices.filter((d) => d.online).length;
+  const tracked = state.devices.filter(isTracked);
+  const online = tracked.filter((d) => d.online).length;
+  const discovered = state.devices.length - tracked.length;
   return el('footer', { class: 'stats' }, [
-    el('span', {}, `${total} dispositivo(s) cadastrado(s)`),
+    el('span', {}, `${tracked.length} na sua lista`),
     el('span', {}, `${online} online agora`),
+    discovered ? el('span', {}, `${discovered} descoberto(s) na rede`) : null,
   ]);
 }
 

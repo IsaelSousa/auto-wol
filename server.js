@@ -48,10 +48,11 @@ app.post('/api/devices', async (req, res) => {
 });
 
 app.put('/api/devices/:id', async (req, res) => {
-  const { name, ip, mac } = req.body || {};
+  const { name, ip, mac, pinned } = req.body || {};
   const patch = {};
   if (name !== undefined) patch.name = name;
   if (ip !== undefined) patch.ip = ip;
+  if (pinned !== undefined) patch.pinned = Boolean(pinned);
   if (mac !== undefined) {
     if (!isValidMac(mac)) return res.status(400).json({ error: 'MAC invalido.' });
     patch.mac = mac.trim().toUpperCase().replace(/-/g, ':');
@@ -59,6 +60,12 @@ app.put('/api/devices/:id', async (req, res) => {
   const updated = await store.updateDevice(req.params.id, patch);
   if (!updated) return res.status(404).json({ error: 'Dispositivo nao encontrado.' });
   res.json(updated);
+});
+
+// remove de uma vez todos os dispositivos "descobertos e nunca usados"
+app.post('/api/devices/prune', async (req, res) => {
+  const removed = await store.pruneDiscovered();
+  res.json({ removed, devices: await store.listDevices() });
 });
 
 app.delete('/api/devices/:id', async (req, res) => {
@@ -122,7 +129,9 @@ app.post('/api/wake/:id', async (req, res) => {
     if (broadcast !== '255.255.255.255') {
       await sendMagicPacket(device.mac, { address: '255.255.255.255' }).catch(() => {});
     }
-    res.json({ ok: true, mac: device.mac, broadcast });
+    // contabiliza o uso para o ranking de "mais usados / recentes"
+    const updated = await store.recordWake(device.id);
+    res.json({ ok: true, mac: device.mac, broadcast, device: updated || device });
   } catch (err) {
     res.status(500).json({ error: 'Falha ao enviar magic packet.', detail: String(err.message || err) });
   }
